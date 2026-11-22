@@ -40,9 +40,3 @@ revision (`:Sedit foo.c@123`), diffs against BASE or any revision
 
 See `:help subvim` for everything, including what isn't supported (amend,
 rebase, hunk staging).
-
-## Tests
-
-`test/run.sh` runs the suite headlessly against throwaway local svn
-repositories (needs `vim` 9.1+, `svn` and `svnadmin`). Pass test names to run
-only those, e.g. `test/run.sh blame stash_roundtrip`.

@@ -806,9 +806,19 @@ function! s:StatusSetup(root) abort
   setlocal filetype=subvim
   augroup subvim_status_buffer
     autocmd! * <buffer>
-    autocmd BufEnter <buffer> call s:StatusRender()
+    autocmd BufEnter <buffer> call s:StatusEnter()
   augroup END
+  " The BufEnter that follows the initial read would render a second time.
+  let b:subvim_skip_enter = 1
   call s:MapStatus()
+endfunction
+
+function! s:StatusEnter() abort
+  if get(b:, 'subvim_skip_enter')
+    unlet b:subvim_skip_enter
+    return
+  endif
+  call s:StatusRender()
 endfunction
 
 " Diff lines worth showing inline for one file.
@@ -842,7 +852,9 @@ function! s:StatusRender(...) abort
   let info = s:Info(root, 1)
   let lines = ['Head: ' . s:BranchLabel(root)]
   call add(lines, 'URL: ' . info.relative)
-  let wcrev = executable('svnversion') ? substitute(system('svnversion ' . shellescape(root)), '\n', '', 'g') : info.revision
+  " Not svnversion: it rescans the whole working copy, which is slow on big
+  " checkouts.  This is the root's revision, plus M when there are changes.
+  let wcrev = info.revision . (empty(st.Unstaged) && empty(st.Staged) ? '' : 'M')
   call add(lines, 'Revision: ' . wcrev)
   let stashes = len(s:StashList(root))
   if stashes
