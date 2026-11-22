@@ -2,85 +2,438 @@
 
 INTRODUCTION                                    *subvim*
 
-Subvim brings fugitive's status-buffer workflow to Subversion working copies.
-Keybindings are kept identical to fugitive wherever Subversion has an
-equivalent, so muscle memory carries over.  Where git "stages", Subversion
-"adds": `s` still does it.
+Subvim brings fugitive's workflow to Subversion working copies.  Commands and
+keybindings mirror fugitive: `:Git` becomes |:Svn|, and the :G file commands
+become :S commands (|:Sedit|, |:Sdiffsplit|, |:Swrite|, ...).  If you know
+fugitive, you know subvim.
 
-Subversion has no staging area.  Every modification in the working copy is
-part of the next commit, and committing sends it straight to the repository
-(there is no separate push).
+Subversion has no staging area, so subvim keeps one for you: staged files go
+into the svn changelist "subvim-staged" (see |g:subvim_changelist|), which
+also shows up in `svn status` and TortoiseSVN.  Subversion cannot put
+directories in a changelist, so staged directories (added, deleted or with
+property changes) are remembered in .svn/subvim/staged-dirs.  Only staged
+changes are committed by |subvim_cc|.
+
+Unlike git, svn stages whole files: there is no hunk staging, and the file is
+committed as it is on disk at commit time.  Committing sends the change
+straight to the repository; there is no separate push.
 
 COMMANDS                                        *subvim-commands*
 
-                                                *:Svn*
+                                                *:Svn* *subvim-summary*
 :Svn                    Open the status buffer for the current working copy
                         in a split.  If one is already visible, jump to it.
 
 :Svn {args}             Run an arbitrary svn command from Vim's current
-                        directory and echo its output, e.g. `:Svn add %`.
-                        Status buffers are refreshed afterwards.
+                        directory.  `%` expands to the current file (in a
+                        subvim:// buffer: the file at its revision).  The
+                        output is echoed; for log, diff, cat, info, list,
+                        status, propget, proplist, mergeinfo and help it is
+                        shown in a split instead.
+
+:Svn! {args}            Always show the output in a split.
+:Svn -p {args}
 
                                                 *:Svn_commit*
-:Svn commit [args]      Without -m or -F, open a commit message buffer.  Write
-                        and close it (|:wq|) to commit; close it without
-                        writing, or leave the message empty, to abort.  Lines
-                        from "--This line, and those below, will be
-                        ignored--" down are discarded, like svn's own editor.
-                        Any extra [args] (paths, --depth, ...) are passed to
-                        `svn commit`.
+:Svn commit [args]      Commit the staged changes.  Without -m or -F, open a
+                        commit message buffer.  Write and close it (|:wq|) to
+                        commit; close it without writing, or leave the message
+                        empty, to abort.  Lines from "--This line, and those
+                        below, will be ignored--" down are discarded.
+:Svn commit -a          Commit every change, staged or not (except files in
+                        the TortoiseSVN "ignore-on-commit" changelist).
+:Svn commit -v          Show the diff below the message.
+:Svn commit {path} ..   Commit the given paths, ignoring the staging area.
 
-STATUS BUFFER                                   *subvim-summary*
+                                                *:Svn_blame*
+:Svn blame [flags]      Open a vertically split, scroll-bound blame of the
+                        current file.  Lines changed in the working copy are
+                        shown as "Not Committed Yet".  In a file at a
+                        revision, blames that revision.
 
-The status buffer has up to three sections:
+                                                *subvim-blame*
+                        Maps in the blame buffer:
+                        g?    show this help
+                        gq    close the blame buffer
+                        <CR>  close blame and open the revision
+                        o     open the revision in a split
+                        O     open the revision in a new tab
+                        p     open the revision in the preview window
+                        -     reblame at the revision (also s and u)
+                        ~     reblame [count] revisions before it (also P)
+                        A     resize to end of author column
+                        C     resize to end of revision column
+                        D     resize to end of date column
+
+                                                *:Svn_branch* *:Svn_tag*
+:Svn branch             List branches; the current one is marked with *.
+:Svn branch {name} [{from}] [-m {msg}]
+                        Create ^/branches/{name} as a copy of the current
+                        branch (or of {from}).  This is a commit to the
+                        repository.  It does not switch to the branch.
+:Svn branch -d {name}   Delete a branch (also a commit).
+:Svn tag [{name}]       Like :Svn branch, for ^/tags.
+
+                                                *:Svn_switch*
+:Svn switch {name}      Switch the working copy to a branch.  {name} may be a
+                        plain branch name, "trunk", or "tags/{tag}"; anything
+                        else (a URL or ^/path) is passed to svn as is.
+
+Branch commands assume the conventional layout of trunk, branches and tags
+next to each other.  See |g:subvim_trunk|.
+
+                                                *:Svn_stash*
+:Svn stash [push] [-u] [-k] [-S] [-m {msg}]
+                        Save the working copy changes as a patch in
+                        .svn/subvim/stash and revert them.  -u also stashes
+                        unversioned files, -k (--keep-index) stashes only
+                        unstaged changes, -S (--staged) only staged ones.
+:Svn stash list         List stashes, newest first as stash@{0}.
+:Svn stash show [n]     Show a stash's patch.
+:Svn stash apply [--index] [n]
+                        Apply a stash with `svn patch`.  --index also
+                        restores what was staged.
+:Svn stash pop [--index] [n]
+                        Apply and drop, unless the patch did not apply
+                        cleanly.
+:Svn stash drop [n]     Delete a stash.
+:Svn stash clear        Delete all stashes.
+
+                                                *:Svn_propedit*
+:Svn propedit {prop} [{path}]
+                        Edit a property in a buffer; writing the buffer sets
+                        the property.
+
+                                                *:Svn_difftool* *:Svn_mergetool*
+:Svn difftool [-y]      Load the changed files into the quickfix list.  With
+                        -y, open each in a tab with |:Sdiffsplit|.
+:Svn mergetool          Load the conflicted files into the quickfix list.
+
+                                                *:Sgrep* *:Slgrep*
+:Sgrep[!] {args}        grep the working copy (skipping .svn) into the
+                        quickfix list and jump to the first match (not with
+                        !).  {args} are passed to grep, e.g. :Sgrep -i foo.
+:Slgrep[!] {args}       Same, with the location list.
+
+                                                *:Sclog* *:Sllog*
+:Sclog[!] [args]        Load the history (svn log) into the quickfix list,
+                        newest first, and open the first revision (not with
+                        !).  [args] are passed to svn log, e.g. -l 20 or
+                        --search foo.  Without -l, -r or -c, the newest
+                        |g:subvim_log_limit| revisions are loaded.  History
+                        always comes from the repository, so revisions newer
+                        than your working copy are included.
+:0Sclog[!] [args]       History of the current file; each entry opens the
+                        file at that revision.
+:Sclog {file}           History of {file}.
+:Sllog                  Same, with the location list.
+
+                                                *:Scd* *:Slcd*
+:Scd [directory]        |:cd| relative to the working copy root.
+:Slcd [directory]       |:lcd| relative to the working copy root.
+
+                                                *:Sedit* *:Ssplit* *:Svsplit*
+                                                *:Stabedit* *:Spedit* *:Sdrop*
+:Sedit [object]         |:edit| a |subvim-object|.  With no argument, edit
+                        the working copy version of the current file.
+:Ssplit [object]        |:split| a |subvim-object|.
+:Svsplit [object]       |:vsplit| a |subvim-object|.
+:Stabedit [object]      |:tabedit| a |subvim-object|.
+:Spedit [object]        |:pedit| a |subvim-object|.
+:Sdrop [object]         |:drop| a |subvim-object|.
+
+                                                *:Sread*
+:Sread [object]         Empty the buffer and read in an object, by default
+                        the BASE version of the current file.  This is like
+                        `svn revert`, but nothing is written to disk.
+
+                                                *:Swrite* *:Swq*
+:Swrite                 Write the current file and stage it (adding it first
+                        if it is unversioned).  In a file at a revision, write
+                        that version to the working copy and stage it.
+:Swrite {path}          Write to {path} and stage it.
+:Swq [path]             |:Swrite| followed by |:quit|.
+
+                                                *:Sdiffsplit* *:Svdiffsplit*
+                                                *:Shdiffsplit*
+:Sdiffsplit [object]    |vimdiff| the current file against an object, by
+                        default its BASE version (the version you last
+                        updated to, as in TortoiseSVN's "Diff").  A revision
+                        such as 123, @123, HEAD or PREV means the current
+                        file at that revision.  The working copy version is
+                        placed on the right or bottom.
+                        On a conflicted file, opens a three-way diff of
+                        "ours" (left), the file with conflict markers
+                        (middle) and "theirs" (right).  d2o and d3o get the
+                        hunk from ours or theirs.
+:Sdiffsplit! [object]   Like :Sdiffsplit, but keep focus on the current
+                        window.
+:Svdiffsplit [object]   Like :Sdiffsplit, but always split vertically.
+:Shdiffsplit [object]   Like :Sdiffsplit, but split horizontally.
+
+                                                *:SMove* *:SRename*
+:SMove {destination}    `svn move` the current file and rename the buffer.
+                        The destination is relative to the current directory,
+                        or to the working copy root if it starts with /.  Add
+                        ! to pass --force.  The move is staged.
+:SRename {destination}  Like :SMove, relative to the current file's directory.
+
+                                                *:SDelete* *:SRemove* *:SUnlink*
+:SDelete                `svn delete` the current file, stage the deletion and
+                        delete the buffer.  Add ! to delete a modified file.
+:SRemove                Like :SDelete, but keep the (now empty) buffer.
+:SUnlink                Same as :SRemove.
+
+                                                *:SBrowse*
+:SBrowse [object]       Open the repository URL of the current file (or
+                        object) in a browser.  For a file at a revision,
+                        ?p=REV is appended, which svn's Apache module
+                        understands.  See |g:subvim_browse_handlers| to
+                        support ViewVC, Trac, and so on.
+:SBrowse!               Put the URL in the clipboard and unnamed register
+                        instead of opening it.
+
+MAPS                                            *subvim-maps*
+
+These maps are available in the status buffer.  Press g? for this help.
+
+The status buffer has these sections:
 
   Unversioned   Files svn does not know about (svn status "?").
-  Missing       Versioned files deleted outside svn (svn status "!").
-  Changes       Everything that will be committed: added (A), modified (M),
-                deleted (D), replaced (R), conflicted (C) ...
+  Unstaged      Changes not in the staging changelist, including missing
+                files ("!") and conflicts ("C").
+  Staged        Changes that |subvim_cc| will commit.
+  Changelist X  Files in other changelists, such as TortoiseSVN's
+                "ignore-on-commit".  These are left alone by commits.
 
-                                                *subvim-maps*
-Adding maps ~
+                                                *subvim-staging-maps*
+Staging maps ~
                                                 *subvim_s*
-s                       Add the file or directory under the cursor (or every
-                        item in a visual selection, or under a section
-                        heading).  Unversioned items are `svn add`ed;
-                        missing items are `svn delete`d so the deletion is
-                        committed.
+s                       Stage the file under the cursor (or every file in a
+                        visual selection or under a section heading).
+                        Unversioned files are `svn add`ed, missing files are
+                        `svn delete`d, and conflicted files are marked
+                        resolved.  Staging an added or deleted directory
+                        stages its contents.  On a hunk, stages the whole
+                        file, as svn cannot commit part of a file.
 
                                                 *subvim_u*
-u                       Un-add the item under the cursor: reverts a
-                        scheduled add (the file stays on disk, unversioned)
-                        or a scheduled delete.  Modifications cannot be
-                        un-added, since Subversion has no staging area.
+u                       Unstage the file under the cursor.  Staged additions
+                        become unversioned again and staged deletions become
+                        missing files again, as with git.  On an unstaged
+                        added file, un-adds it.  On a file in another
+                        changelist, removes it from that changelist.
 
                                                 *subvim_-*
--                       Add or un-add, whichever applies.
+-                       Stage or unstage, whichever applies.
 
-Commit maps ~
-                                                *subvim_cc*
-cc                      Open a commit message buffer (|:Svn_commit|).
+                                                *subvim_U*
+U                       Unstage everything.
 
+                                                *subvim_X*
+X                       Discard the change under the cursor (svn revert, or
+                        delete an unversioned file).  On a hunk of an inline
+                        diff, discard just that hunk.  A copy of what was
+                        thrown away is kept in .svn/subvim/trash.
+
+                                                *subvim_=*
+=                       Toggle an inline diff of the file under the cursor.
+>                       Insert an inline diff.
+<                       Remove the inline diff.
+
+                                                *subvim_gI*
+gI                      Open the svn:ignore property of the parent folder in
+                        a split, with the file under the cursor added.  Write
+                        the buffer to set the property.  Like TortoiseSVN's
+                        "Add to ignore list", this change is committed and
+                        shared.  With a count, opens in a new tab.
+gi                      Open the svn:ignore property of the root folder.
+
+                                                *subvim_d*
+Diff maps ~
+dd                      |:Sdiffsplit| on the file under the cursor.
+dv                      |:Svdiffsplit| on the file under the cursor.
+ds                      |:Shdiffsplit| on the file under the cursor.
+dh                      Same as ds.
+dp                      `svn diff` the file under the cursor in a split.
+dq                      In a diff, close all other diff windows.
+d?                      Show this help.
+
+                                                *subvim-navigation-maps*
 Navigation maps ~
 
-<CR>                    Open the file under the cursor.
+<CR>                    Open the file under the cursor (a deleted file opens
+                        at BASE).
 o                       Open the file under the cursor in a new split.
-gO                      Open the file under the cursor in a new vertical split.
+gO                      Open the file under the cursor in a new vertical
+                        split.
 O                       Open the file under the cursor in a new tab.
-(                       Jump to the previous file.
-)                       Jump to the next file.
-gu                      Jump to the Unversioned section.
-gU                      Jump to the Missing section.
-gs                      Jump to the Changes section.
-gq                      Close the status buffer.
-g?                      Show this help.
+p                       Open the file under the cursor in a preview window.
+(  CTRL-P  [m  [/       Jump to the previous file.
+)  CTRL-N  ]m  ]/       Jump to the next file.
+K  [c                   Jump to the previous hunk.
+J  ]c                   Jump to the next hunk.
+i                       Jump to the next file or hunk, expanding inline diffs
+                        as needed.
+[[                      Jump to the previous section.
+]]                      Jump to the next section.
+gu                      Jump to file [count] in the Unversioned section (or
+                        Unstaged, if there is none).
+gU                      Jump to file [count] in the Unstaged section.
+gs                      Jump to file [count] in the Staged section.
 
-The status buffer reloads automatically whenever it is entered and after any
-file is written.
+In revision and log buffers, <CR>, o, gO, O and p open the file under the
+cursor (a changed path, or a line of the diff) at that revision; on other
+lines they open the revision.  ( and ) jump between revisions and files.
+In a file at a revision, ~ and P open the previous revision in which the
+file changed, and C opens the revision.
+
+                                                *subvim_c*
+Commit maps ~
+
+                                                *subvim_cc*
+cc                      Commit the staged changes.
+cvc                     Commit, showing the diff below the message.
+c<Space>                Populate command line with ":Svn commit ".
+cm<Space>               Populate command line with ":Svn merge ".
+c?                      Show this help.
+
+                                                *subvim_cr*
+In revision, log and blame buffers, and files at a revision:
+
+crc                     Revert the revision under the cursor: reverse-merge
+                        it into the working copy, stage the result and open
+                        a commit message.
+crn                     Reverse-merge and stage, without committing.
+cr<Space>               Populate command line with ":Svn merge -c -".
+coo                     Update the working copy to the revision under the
+                        cursor (svn update -r).
+
+                                                *subvim_cb* *subvim_co*
+Branch maps ~
+
+cb<Space>               Populate command line with ":Svn branch ".
+co<Space>               Populate command line with ":Svn switch ".
+cb?                     Show this help.
+
+                                                *subvim_cz*
+Stash maps ~
+
+czz                     Stash all changes.  With a [count] of 1, include
+                        unversioned files.
+czw                     Stash only unstaged changes (--keep-index).
+czs                     Stash only staged changes.
+czA                     Apply the newest stash, or stash@{count}.
+cza                     Apply the newest stash, or stash@{count}, restoring
+                        what was staged.
+czP                     Pop the newest stash, or stash@{count}.
+czp                     Pop the newest stash, or stash@{count}, restoring
+                        what was staged.
+cz<Space>               Populate command line with ":Svn stash ".
+cz?                     Show this help.
+
+                                                *subvim-misc-maps*
+Miscellaneous maps ~
+
+gq                      Close the status buffer.
+.                       Start a : command line with the file under the cursor
+                        prepopulated.
+g?                      Show help for |subvim-maps|.
+
+                                                *subvim-global-maps*
+Global maps ~
+
+These are defined in every buffer inside a working copy unless
+|g:subvim_no_maps| is set.
+
+<C-R><C-G>              On the command line, insert the current object (for
+                        example a.txt or a.txt@123).
+y<C-G>                  Yank the current object.
+
+SPECIFYING OBJECTS                              *subvim-object*
+
+subvim uses svn's own peg revision syntax:
+
+Object          Meaning ~
+a.txt           a.txt in the working copy
+a.txt@BASE      a.txt as you last updated it (pristine copy)
+a.txt@123       a.txt in r123
+a.txt@HEAD      a.txt in the newest revision on the server
+%@PREV          the current file in the revision before it last changed
+:/dir/a.txt     a path relative to the working copy root
+^/branches/x/a.txt@5
+                any repository path at a revision
+@123  r123      revision 123: its log message and diff
+
+Objects are shown in subvim:// buffers, such as
+subvim:///path/to/wc//123/a.txt.
+
+STATUSLINE                                      *subvim-statusline*
+
+                                                *SubvimStatusline()*
+Add %{SubvimStatusline()} to 'statusline' to show the branch, e.g.
+[Svn(trunk)], or [Svn:r123(trunk)] for a file at a revision.
+
+OPTIONS                                         *subvim-options*
+
+                                                *g:subvim_changelist*
+g:subvim_changelist     Name of the changelist used as the staging area.
+                        Default: "subvim-staged".
+
+                                                *g:subvim_trunk*
+                                                *g:subvim_branches*
+                                                *g:subvim_tags*
+g:subvim_trunk, g:subvim_branches, g:subvim_tags
+                        Names of the trunk, branches and tags directories.
+                        Defaults: "trunk", "branches", "tags".
+
+                                                *g:subvim_log_limit*
+g:subvim_log_limit      Number of revisions |:Sclog| loads by default.
+                        Default: 256.
+
+                                                *g:subvim_no_maps*
+g:subvim_no_maps        Set to 1 to skip the |subvim-global-maps|.
+
+                                                *g:subvim_browse_handlers*
+g:subvim_browse_handlers
+                        A list of functions used by |:SBrowse|.  Each is
+                        called with a dictionary with the keys url, repos,
+                        path (in the repository), rev, kind (work, blob or
+                        revision), line1 and line2, and returns a URL, or ''
+                        to try the next one.  Example for ViewVC: >
+                          function! ViewVC(opts) abort
+                            return 'https://svn.example.com/viewvc'
+                                  \ . a:opts.path . (empty(a:opts.rev) ? ''
+                                  \ : '?revision=' . a:opts.rev)
+                          endfunction
+                          let g:subvim_browse_handlers = [function('ViewVC')]
+<
+AUTOCOMMANDS                                    *subvim-autocommands*
+
+User autocommands are fired after these events:
+
+SubvimIndex             The status buffer is loaded or refreshed.
+SubvimBlob              A file at a revision is loaded.
+SubvimRevision          A revision buffer is loaded.
+SubvimBlame             A blame buffer is opened.
+SubvimChanged           subvim changed the working copy.
+
+API                                             *subvim-api*
+
+SubvimRoot([path])      The working copy root, or '' outside a working copy.
+SubvimReal([url])       The working copy path for a subvim:// URL.
+SubvimStatusline()      See |subvim-statusline|.
+
+NOT SUPPORTED                                   *subvim-unsupported*
+
+These fugitive features have no Subversion counterpart and are left out:
+staging hunks (P, I), amending and rewording commits (ca, ce, cw, cW), fixup
+and squash commits (cf, cF, cs, cS, cn), rebasing (r maps), and the Unpushed
+and Unpulled sections (every svn commit is already on the server).
 
 ABOUT                                           *subvim-about*
 
-Commits use `svn --non-interactive`, so credentials must already be cached
-(run `svn commit` once from a shell if prompted).
+svn always runs with --non-interactive, so credentials must already be
+cached (run any svn command once from a shell if you are prompted).
 
  vim:tw=78:et:ft=help:norl:
