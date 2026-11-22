@@ -1,0 +1,86 @@
+*subvim.txt*  A Subversion wrapper in the spirit of fugitive.vim
+
+INTRODUCTION                                    *subvim*
+
+Subvim brings fugitive's status-buffer workflow to Subversion working copies.
+Keybindings are kept identical to fugitive wherever Subversion has an
+equivalent, so muscle memory carries over.  Where git "stages", Subversion
+"adds": `s` still does it.
+
+Subversion has no staging area.  Every modification in the working copy is
+part of the next commit, and committing sends it straight to the repository
+(there is no separate push).
+
+COMMANDS                                        *subvim-commands*
+
+                                                *:Svn*
+:Svn                    Open the status buffer for the current working copy
+                        in a split.  If one is already visible, jump to it.
+
+:Svn {args}             Run an arbitrary svn command from Vim's current
+                        directory and echo its output, e.g. `:Svn add %`.
+                        Status buffers are refreshed afterwards.
+
+                                                *:Svn_commit*
+:Svn commit [args]      Without -m or -F, open a commit message buffer.  Write
+                        and close it (|:wq|) to commit; close it without
+                        writing, or leave the message empty, to abort.  Lines
+                        from "--This line, and those below, will be
+                        ignored--" down are discarded, like svn's own editor.
+                        Any extra [args] (paths, --depth, ...) are passed to
+                        `svn commit`.
+
+STATUS BUFFER                                   *subvim-summary*
+
+The status buffer has up to three sections:
+
+  Unversioned   Files svn does not know about (svn status "?").
+  Missing       Versioned files deleted outside svn (svn status "!").
+  Changes       Everything that will be committed: added (A), modified (M),
+                deleted (D), replaced (R), conflicted (C) ...
+
+                                                *subvim-maps*
+Adding maps ~
+                                                *subvim_s*
+s                       Add the file or directory under the cursor (or every
+                        item in a visual selection, or under a section
+                        heading).  Unversioned items are `svn add`ed;
+                        missing items are `svn delete`d so the deletion is
+                        committed.
+
+                                                *subvim_u*
+u                       Un-add the item under the cursor: reverts a
+                        scheduled add (the file stays on disk, unversioned)
+                        or a scheduled delete.  Modifications cannot be
+                        un-added, since Subversion has no staging area.
+
+                                                *subvim_-*
+-                       Add or un-add, whichever applies.
+
+Commit maps ~
+                                                *subvim_cc*
+cc                      Open a commit message buffer (|:Svn_commit|).
+
+Navigation maps ~
+
+<CR>                    Open the file under the cursor.
+o                       Open the file under the cursor in a new split.
+gO                      Open the file under the cursor in a new vertical split.
+O                       Open the file under the cursor in a new tab.
+(                       Jump to the previous file.
+)                       Jump to the next file.
+gu                      Jump to the Unversioned section.
+gU                      Jump to the Missing section.
+gs                      Jump to the Changes section.
+gq                      Close the status buffer.
+g?                      Show this help.
+
+The status buffer reloads automatically whenever it is entered and after any
+file is written.
+
+ABOUT                                           *subvim-about*
+
+Commits use `svn --non-interactive`, so credentials must already be cached
+(run `svn commit` once from a shell if prompted).
+
+ vim:tw=78:et:ft=help:norl:
