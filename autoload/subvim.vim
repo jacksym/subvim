@@ -53,16 +53,108 @@ function! s:Event(name) abort
   endif
 endfunction
 
-function! s:ShellCmd(dir, args) abort
-  return 'cd ' . shellescape(a:dir) . ' && svn --non-interactive '
-        \ . join(map(copy(a:args), 'shellescape(v:val)'), ' ')
+" Section: Running svn {{{1
+
+" Commands run as jobs from an argument list, like fugitive: no shell, so no
+" console window flashing up on Windows, and no quoting or temp files.
+" system() is only the fallback for Vims without jobs.
+
+function! s:ShellCmd(dir, argv) abort
+  return 'cd ' . (has('win32') ? '/d ' : '') . shellescape(a:dir) . ' && '
+        \ . join(map(copy(a:argv), 'shellescape(v:val)'), ' ')
+endfunction
+
+" Neovim delivers output as lists in which the last item of one chunk
+" continues the first item of the next.
+function! s:NvimCollect(lines, job, data, event) abort
+  let a:lines[-1] .= remove(a:data, 0)
+  call extend(a:lines, a:data)
+endfunction
+
+" Run argv in dir and wait for it.  With outfile, stdout goes byte-for-byte
+" to that file and stderr is returned separately; otherwise stderr is merged
+" into stdout.  Returns [output, status].
+let s:busy = 0
+
+function! s:Exec(dir, argv, ...) abort
+  let s:busy += 1
+  try
+    return call('s:ExecWait', [a:dir, a:argv] + a:000)
+  finally
+    let s:busy -= 1
+  endtry
+endfunction
+
+" Waiting for a job sleeps, and timers can fire during that sleep.  Timers
+" that touch the working copy go through here so they never run in the
+" middle of another svn call (e.g. a commit landing inside a status render,
+" which would then overwrite the buffer with pre-commit output).
+function! s:Defer(Fn) abort
+  call timer_start(s:busy ? 20 : 0, {-> s:busy ? s:Defer(a:Fn) : a:Fn()})
+endfunction
+
+function! s:ExecWait(dir, argv, ...) abort
+  let outfile = a:0 ? a:1 : ''
+  if exists('*jobstart')
+    let [out, err] = [[''], ['']]
+    let job = jobstart(a:argv, {'cwd': a:dir,
+          \ 'on_stdout': function('s:NvimCollect', [out]),
+          \ 'on_stderr': function('s:NvimCollect', [err])})
+    if job <= 0
+      return ['subvim: cannot run ' . a:argv[0], 1]
+    endif
+    call chanclose(job, 'stdin')
+    let status = jobwait([job])[0]
+    if !empty(outfile)
+      call writefile(out, outfile, 'b')
+      let output = join(err, "\n")
+    else
+      let [o, e] = [substitute(join(out, "\n"), '\n\+$', '', ''), join(err, "\n")]
+      let output = empty(o) || e =~# '^\n*$' ? o . e : o . "\n" . e
+    endif
+  elseif exists('*job_start')
+    let chunks = []
+    let jopts = {'cwd': a:dir, 'in_io': 'null',
+          \ 'out_mode': 'raw', 'err_mode': 'raw',
+          \ 'err_cb': {ch, data -> add(chunks, data)}}
+    if empty(outfile)
+      call extend(jopts, {'err_io': 'out', 'out_cb': {ch, data -> add(chunks, data)}})
+    else
+      call extend(jopts, {'out_io': 'file', 'out_name': outfile})
+    endif
+    let job = job_start(a:argv, jopts)
+    if job_status(job) ==# 'fail'
+      return ['subvim: cannot run ' . a:argv[0], 1]
+    endif
+    while job_status(job) ==# 'run' || ch_status(job) !~# '^\%(closed\|fail\)$'
+      sleep 1m
+    endwhile
+    let status = job_info(job).exitval
+    let output = join(chunks, '')
+  else
+    let err = tempname()
+    let output = system(s:ShellCmd(a:dir, a:argv)
+          \ . (empty(outfile) ? ' 2>&1' : ' > ' . shellescape(outfile) . ' 2> ' . shellescape(err)))
+    let status = v:shell_error
+    if !empty(outfile)
+      let output = filereadable(err) ? join(readfile(err), "\n") : ''
+      call delete(err)
+    endif
+  endif
+  if has('win32')
+    let output = substitute(output, '\r\n', '\n', 'g')
+  endif
+  return [substitute(output, '\n\+$', '', ''), status]
+endfunction
+
+function! s:SvnArgv(args) abort
+  return [get(g:, 'subvim_svn', 'svn'), '--non-interactive'] + a:args
 endfunction
 
 " Run svn with a list of arguments in directory dir.  Returns [output, status]
 " with stderr merged into the output.
 function! s:Run(dir, args) abort
-  let out = system(s:ShellCmd(a:dir, a:args) . ' 2>&1')
-  return [substitute(out, '\n\+$', '', ''), v:shell_error]
+  return s:Exec(a:dir, s:SvnArgv(a:args))
 endfunction
 
 " Like s:Run, but throws on failure and returns only the output.
@@ -76,12 +168,7 @@ endfunction
 
 " Run svn writing stdout to file; returns [stderr, status].
 function! s:RunToFile(dir, args, file) abort
-  let err = tempname()
-  call system(s:ShellCmd(a:dir, a:args) . ' > ' . shellescape(a:file) . ' 2> ' . shellescape(err))
-  let status = v:shell_error
-  let msg = filereadable(err) ? join(readfile(err), "\n") : ''
-  call delete(err)
-  return [msg, status]
+  return s:Exec(a:dir, s:SvnArgv(a:args), a:file)
 endfunction
 
 " Arguments for svn reading paths from a --targets file, avoiding argv limits
@@ -1433,7 +1520,7 @@ endfunction
 function! s:CommitFinish(bufnr) abort
   let state = remove(s:commits, a:bufnr)
   " Finish outside of the wipeout autocommand.
-  call timer_start(0, {-> s:CommitRun(state)})
+  call s:Defer({-> s:CommitRun(state)})
 endfunction
 
 function! s:CommitRun(state) abort
@@ -1840,11 +1927,54 @@ endfunction
 
 " Section: :Sgrep, :Sclog, :Scd {{{1
 
+" Split a command line into words the way a shell would for simple cases:
+" whitespace separates, '...' and "..." quote, backslash escapes.
+function! s:SplitArgs(str) abort
+  let [words, word, quote, inword, i] = [[], '', '', 0, 0]
+  while i < len(a:str)
+    let c = a:str[i]
+    if !empty(quote)
+      if c ==# quote
+        let quote = ''
+      elseif c ==# '\' && quote ==# '"' && i + 1 < len(a:str)
+        let i += 1
+        let word .= a:str[i]
+      else
+        let word .= c
+      endif
+    elseif c =~# '\s'
+      if inword
+        call add(words, word)
+        let [word, inword] = ['', 0]
+      endif
+    elseif c ==# "'" || c ==# '"'
+      let [quote, inword] = [c, 1]
+    elseif c ==# '\' && i + 1 < len(a:str)
+      let i += 1
+      let [word, inword] = [word . a:str[i], 1]
+    else
+      let [word, inword] = [word . c, 1]
+    endif
+    let i += 1
+  endwhile
+  if inword
+    call add(words, word)
+  endif
+  return words
+endfunction
+
 function! subvim#Grep(type, bang, args) abort
   try
     let root = s:RootOrThrow()
-    let cmd = 'cd ' . shellescape(root) . ' && grep -rnI --exclude-dir=.svn ' . a:args . ' .'
-    let lines = map(systemlist(cmd), 'substitute(v:val, "^\\./", "", "")')
+    let grep = get(g:, 'subvim_grep', 'grep')
+    if !executable(grep)
+      call s:Throw(grep . ' not found (set g:subvim_grep)')
+    endif
+    let [out, status] = s:Exec(root, [grep, '-rnI', '--exclude-dir=.svn'] + s:SplitArgs(a:args) + ['.'])
+    if status > 1
+      call s:Throw(out)
+    endif
+    let lines = map(split(out, "\n"), 'substitute(v:val, "^\\./", "", "")')
     let lines = map(lines, 'fnamemodify(s:Full(root, matchstr(v:val, "^[^:]*")), ":~:.") . matchstr(v:val, ":.*")')
     let efm = &errorformat
     try

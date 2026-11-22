@@ -113,6 +113,8 @@ next to each other.  See |g:subvim_trunk|.
 :Sgrep[!] {args}        grep the working copy (skipping .svn) into the
                         quickfix list and jump to the first match (not with
                         !).  {args} are passed to grep, e.g. :Sgrep -i foo.
+                        Needs grep (|g:subvim_grep|); on Windows, Git for
+                        Windows ships one in usr\bin.
 :Slgrep[!] {args}       Same, with the location list.
 
                                                 *:Sclog* *:Sllog*
@@ -375,6 +377,15 @@ Add %{SubvimStatusline()} to 'statusline' to show the branch, e.g.
 [Svn(trunk)], or [Svn:r123(trunk)] for a file at a revision.
 
 OPTIONS                                         *subvim-options*
+
+                                                *g:subvim_svn*
+g:subvim_svn            The svn executable.  Default: "svn".  Commands run
+                        as jobs, without a shell, so no console window
+                        appears on Windows.
+
+                                                *g:subvim_grep*
+g:subvim_grep           The grep executable used by |:Sgrep|.
+                        Default: "grep".
 
                                                 *g:subvim_changelist*
 g:subvim_changelist     Name of the changelist used as the staging area.
